@@ -1,15 +1,24 @@
 
-import copy
 from math import inf
 import colony_functions as f
 
 
-class Colony:
+class SparkColony:
 
-    def __init__(self, evaluation, generation, cross='singlepoint', mutation='binary', selection='roulette',
-                 survival='roulette', mut_ratio=0.05, survival_ratio=0.2, population=None, control_obj=None):
+    def __init__(self, spark_context, evaluation, generation, cross='singlepoint', mutation='binary',
+                 selection='roulette', survival='roulette', mut_ratio=0.05, survival_ratio=0.2, population=None,
+                 control_obj=None):
+        # spark context
+        global sc
+        sc = spark_context
+        # control object
+        global control
+        control = spark_context.broadcast(control_obj) if control_obj else None
+        # rank value
+        global rankval
+        rankval = 0
         # auxiliar counter
-        # allows the colony to avoid the sort function if the population is already sorted
+        # allows the colony to avoid the sort function if it is already sorted
         self.__sorted = False
         # best fitness result
         self.__best_fitness = -inf
@@ -27,9 +36,6 @@ class Colony:
         # ratios (0..1)
         self.__mut_ratio = mut_ratio
         self.__survival = survival_ratio
-        # some problems may need a control object to manage
-        # their functions. That object can be of any given nature
-        self.__control_obj = copy.deepcopy(control_obj)
         # content list
         # population inicialization either by direct asignation (list)
         # or generation (None)
@@ -41,8 +47,10 @@ class Colony:
             self.__colony_size = 0
             self.__population = []
             self.__rankval = 0
-        # DEBUG VARIABLE
-        self.last_iters = 0
+
+    def spark_map(self, function, population):
+        global sc
+        return sc.parallelize(population).map(function).collect()
 
     """ OBJECT FUNCTIONS """
 
@@ -123,47 +131,54 @@ class Colony:
         self.__survival_f = survival
         return self
 
-    def set_control(self, control):
-        self.__control_obj = copy.deepcopy(control)
+    def set_control(self, control_obj):
+        global control
+        global sc
+        control = sc.broadcast(control_obj) if control_obj else None
         return self
 
     """ COLONY FUNCTIONS """
 
+    def __evaluate(self, ilist=None):
+        global sc
+        global control
+        if control:
+            if ilist:
+                self.__population = sc.parallelize(ilist).map(
+                    lambda x: (self.__evaluation_f(x, control.value), x)).collect()
+            else:
+                self.__population = sc.parallelize(self.__population).map(
+                    lambda x: (self.__evaluation_f(x, control.value), x)).collect()
+        else:
+            if ilist:
+                self.__population = sc.parallelize(ilist).map(lambda x: (self.__evaluation_f(x), x)).collect()
+            else:
+                self.__population = sc.parallelize(self.__population).map(
+                    lambda x: (self.__evaluation_f(x), x)).collect()
+
+    def __evaluate_return(self, ilist):
+        global sc
+        global control
+        if control:
+            return sc.parallelize(ilist).map(lambda x: (self.__evaluation_f(x, control.value), x)).collect()
+        else:
+            return sc.parallelize(ilist).map(lambda x: (self.__evaluation_f(x), x)).collect()
+
     def __sort_population(self):
-        if not self.__sorted and self.__population:
+        if not self.__sorted:
             self.__population.sort(reverse=True)
             self.__sorted = True
             self.__best_fitness = self.__population[0][0]
 
-    def __evaluate(self, ilist=None):
-        if self.__control_obj:
-            if ilist:
-                self.__population = [(self.__evaluation_f(i, self.__control_obj), i)
-                                     for i in ilist]
-            else:
-                self.__population = [(self.__evaluation_f(y, self.__control_obj), y)
-                                     for _, y in self.__population]
-        else:
-            if ilist:
-                self.__population = [(self.__evaluation_f(i), i)
-                                     for i in ilist]
-            else:
-                self.__population = [(self.__evaluation_f(y), y)
-                                     for _, y in self.__population]
-
-    def __evaluate_return(self, ilist):
-        if self.__control_obj:
-            return [(self.__evaluation_f(i, self.__control_obj), i) for i in ilist]
-        else:
-            return [(self.__evaluation_f(i), i) for i in ilist]
-
     def get_population(self, fitness=True):
+        global sc
         if fitness:
             return self.__population
         else:
-            return list(map(lambda x: x[1], self.__population))
+            return sc.parallelize(self.__population).map(lambda x: x[1]).collect()
 
     def populate(self, members):
+        global control
         if isinstance(self.__generation_f, int):
             self.__evaluate(ilist=[f.generation_boolean(self.__generation_f)
                                    for _ in range(members)])
@@ -172,12 +187,13 @@ class Colony:
             self.__evaluate(ilist=[f.generation_string(lenght)
                                    for _ in range(members)])
         else:
-            if self.__control_obj:
-                self.__evaluate([self.__generation_f(self.__control_obj) for _ in range(members)])
+            if control:
+                self.__evaluate([self.__generation_f(control.value) for _ in range(members)])
             else:
                 self.__evaluate([self.__generation_f() for _ in range(members)])
         self.__colony_size = members
-        self.__rankval = int((self.__colony_size * (self.__colony_size + 1) / 2) - self.__colony_size)
+        global rankval
+        rankval = int((self.__colony_size * (self.__colony_size + 1) / 2) - self.__colony_size)
         self.__sorted = False
         self.__best_fitness = -inf
         return self
@@ -196,27 +212,25 @@ class Colony:
     def evolve(self, iterations, objective=inf, wait=-1):
         if self.__colony_size > 0 and self.__best_fitness < objective:
             # calculate how generation works
-            cut_point = int(self.__survival*self.__colony_size)
-            num_sons_pairs = int((1-self.__survival)*self.__colony_size/2)
-            if 2*num_sons_pairs+cut_point < self.__colony_size:
+            cut_point = int(self.__survival * self.__colony_size)
+            num_sons_pairs = int((1 - self.__survival) * self.__colony_size / 2)
+            if 2 * num_sons_pairs + cut_point < self.__colony_size:
                 num_sons_pairs += 1
             # control variables
             best = -inf
             static = 0
-            self.last_iters = 0
             for _ in range(iterations):
                 parents = self.__select_parents(num_sons_pairs)
                 newborns = self.__cross_parents(parents)
                 # flat newborns list
                 newborns = [item for sublist in newborns for item in sublist]
                 newborns = self.__mutate_newborns(newborns)
-                # first we extinct the population, then add newborns
+                # in this version first we extinct the population, then add newborns
                 self.__population_survival(cut_point)
                 # after population death append evaluated newborns
                 self.__population += self.__evaluate_return(newborns)
                 self.__sorted = False
                 # stop control
-                self.last_iters += 1
                 if self.__best_fitness >= objective:
                     break
                 if self.__best_fitness > best:
@@ -275,8 +289,9 @@ class Colony:
                 elif self.__mutation_f == 'boolean':
                     mutants = [f.mutation_boolean(n, self.__mut_ratio) for n in newborns]
             elif callable(self.__mutation_f):
-                if self.__control_obj:
-                    mutants = [self.__mutation_f(self.__control_obj, n, self.__mut_ratio) for n in newborns]
+                global control
+                if control:
+                    mutants = [self.__mutation_f(control, n, self.__mut_ratio) for n in newborns]
                 else:
                     mutants = [self.__mutation_f(n, self.__mut_ratio) for n in newborns]
         return mutants

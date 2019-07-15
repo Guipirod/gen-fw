@@ -82,7 +82,7 @@ class Master:
         self.__rdd = self.__rdd.map(lambda x: x.set_control(control_obj)).map(lambda x: x.populate(population))
 
     def get_best(self, *args):
-        t = time()  ## [DEBUG]
+        t = time()  # [DEBUG]
         result = None
         if self.__rdd:
             if args:
