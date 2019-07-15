@@ -93,7 +93,7 @@ class Master:
             else:
                 result = sorted(self.__rdd.map(lambda x: x.get_best()).collect(), reverse=True)[0]
                 self.__best_fitness = result[0]
-        print("[DEBUG] - Time in seconds: " + str(time() - t))  ## [DEBUG]
+        print("[DEBUG] - Time in seconds: " + str(time() - t))  # [DEBUG]
         return result
 
     def evolve(self, iterations, objective=inf, wait=-1, granular=False, collect=False):
@@ -105,11 +105,11 @@ class Master:
                 if isinstance(instruction, int):
                     intval = instruction
                     if granular:
-                        print('[DEBUG] - evolve granular')  ## [DEBUG]
+                        print('[DEBUG] - evolve granular')  # [DEBUG]
                         for _ in range(instruction):
                             self.__rdd = self.__rdd.map(lambda x: x.evolve(1, objective=objective, wait=wait))
                     else:
-                        print('[DEBUG] - evolve iterate')  ## [DEBUG]
+                        print('[DEBUG] - evolve iterate')  # [DEBUG]
                         self.__rdd = self.__rdd.map(lambda x: x.evolve(intval, objective=objective, wait=wait))
                     if collect:
                         self.__best_fitness = sorted(self.__rdd.map(lambda x: x.get_best()[0]).collect(),
@@ -117,17 +117,17 @@ class Master:
                 elif isinstance(instruction, str):
                     if instruction == 'migration':
                         t1 = time()
-                        print('[DEBUG] - migration')  ## [DEBUG]
+                        print('[DEBUG] - migration')  # [DEBUG]
                         self.__migration_function()
                         self.clustering_time += time() - t1
                     elif instruction == 'kmeans':
                         t1 = time()
-                        print('[DEBUG] - kmeans_clustering')  ## [DEBUG]
+                        print('[DEBUG] - kmeans_clustering')  # [DEBUG]
                         self.__kmeans_clustering()
                         self.clustering_time += time() - t1
                     elif instruction == 'gauss':
                         t1 = time()
-                        print('[DEBUG] - gauss_clustering')  ## [DEBUG]
+                        print('[DEBUG] - gauss_clustering')  # [DEBUG]
                         self.__gauss_clustering()
                         self.clustering_time += time() - t1
                     elif instruction == 'cache':
