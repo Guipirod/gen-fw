@@ -7,58 +7,45 @@ import colony_functions as f
 
 class Colony:
 
-    def __init__(self, evaluation, **kargs):
-        # generation function
-        # this function can be either an int (generate lists of n [0,1] values) or
-        # an int written as a string (generating strings of n ['0','1'] values)
-        # any problem-specific generation function must be provided by the user
-        self.generation_f = kargs['generation'] if 'generation' in kargs else None
-        # colony functions
+    def __init__(self, evaluation, generation, cross='singlepoint', mutation='binary', selection='roulette',
+                 survival='roulette', mut_ratio=0.05, survival_ratio=0.2, population=None, control_obj=None):
+        # auxiliar counter
+        # allows the colony to avoid the sort function if the population is already sorted
+        self.__sorted = False
+        # best fitness result
+        self.__best_fitness = -inf
+        # user-defined function
         self.__evaluation_f = evaluation
-        self.cross_f = kargs['cross'] if 'cross' in kargs else 'singlepoint'
-        self.mutation_f = kargs['mutation'] if 'mutation' in kargs else 'binary'
-        self.selection_f = kargs['selection'] if 'selection' in kargs else 'roulette'
-        self.death_f = kargs['death'] if 'death' in kargs else 'weighted'  # BORRAR
-        self.survival_f = kargs['survival'] if 'survival' in kargs else 'pseudo'  # get survivors if elitism is on
-        # ratios (0...1)
-        self.mut_ratio = kargs['mut_ratio'] if 'mut_ratio' in kargs else .05  # allele mutation probability
-        self.elitism = kargs['elitism'] if 'elitism' in kargs else 0  # generational survivors
-        # control object, it can be of any given nature
-        self.control_obj = copy.deepcopy(kargs['control_obj']) if 'control_obj' in kargs else None
-        # control variables
-        self.__best_fitness = -inf  # best fitness result
-        self.__sorted = False  # controls if the colony is sorted
-        self.__population = []  # colony list population, each element is a tuple: (fitness, individual)
-        self.__colony_size = 0
-        # debug timers
-        self.total_time = 0
-        self.fitness_time = 0
-        self.selection_time = 0
-        self.crossover_time = 0
-        self.mutation_time = 0
-        self.extintion_time = 0
+        # optional definition function, generation can be either a function
+        # or a 'n' int, meaning it will be 'n' boolean values
+        self.__generation_f = generation
+        # optional definition functions, can be eiter a function or a str,
+        # the latter case meaning it will use a pre-made function
+        self.__cross_f = cross
+        self.__mutation_f = mutation
+        self.__selection_f = selection
+        self.__survival_f = survival
+        # ratios (0..1)
+        self.__mut_ratio = mut_ratio
+        self.__survival = survival_ratio
+        # some problems may need a control object to manage
+        # their functions. That object can be of any given nature
+        self.__control_obj = copy.deepcopy(control_obj)
+        # content list
+        # population inicialization either by direct asignation (list)
+        # or generation (None)
+        if population:
+            self.__colony_size = len(population)
+            self.__evaluate(ilist=population)
+            self.__rankval = int((self.__colony_size * (self.__colony_size + 1) / 2) - self.__colony_size)
+        else:
+            self.__colony_size = 0
+            self.__population = []
+            self.__rankval = 0
+        # DEBUG VARIABLE
+        self.last_iters = 0
 
-    # print debug timers
-
-    def init_time(self):
-        # BORRA ESTO: DEBUG TIMER
-        self.total_time = 0
-        self.fitness_time = 0
-        self.selection_time = 0
-        self.crossover_time = 0
-        self.mutation_time = 0
-        self.extintion_time = 0
-
-    def timer(self):
-        print('Total time: {:.7f}'.format(self.total_time))
-        print('+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-')
-        print('Fitness: {:.5f} {:.5f}%'.format(self.fitness_time, 100 * self.fitness_time / self.total_time))
-        print('Selection: {:.5f} {:.5f}%'.format(self.selection_time, 100 * self.selection_time / self.total_time))
-        print('Crossover: {:.5f} {:.5f}%'.format(self.crossover_time, 100 * self.crossover_time / self.total_time))
-        print('Mutation: {:.5f} {:.5f}%'.format(self.mutation_time, 100 * self.mutation_time / self.total_time))
-        print('Extintion: {:.5f} {:.5f}%'.format(self.extintion_time, 100 * self.extintion_time / self.total_time))
-
-    # object functions
+    """ OBJECT FUNCTIONS """
 
     def __getitem__(self, i):
         return self.__population[i]
@@ -93,155 +80,226 @@ class Colony:
         del self.__population[index]
         return self
 
-    def _cmp(self, other):
-        return self.__colony_size - len(other)
+    """ SETTERS AND GETTERS """
 
-    def __lt__(self, other):
-        return self._cmp(other) < 0
-
-    def __le__(self, other):
-        return self._cmp(other) <= 0
-
-    def __eq__(self, other):
-        return self._cmp(other) == 0
-
-    def __ne__(self, other):
-        return self._cmp(other) != 0
-
-    def __gt__(self, other):
-        return self._cmp(other) > 0
-
-    def __ge__(self, other):
-        return self._cmp(other) >= 0
-
-    # setters and getters
-
-    def is_sorted(self) -> bool:
-        return self.__sorted
-
-    def best_fitness(self) -> float:
-        return self.__best_fitness
-
-    def set_population(self, population, evaluate=True):
-        if evaluate:
-            self.evaluate_input(population)
-        else:
-            self.__population = population
+    def set_population(self, population):
         self.__colony_size = len(population)
+        self.__evaluate(ilist=population)
         self.__sorted = False
         self.__best_fitness = -inf
         return self
 
     def set_evaluation(self, evaluation):
         self.__evaluation_f = evaluation
-        self.evaluate()
+        self.__evaluate()
         self.__sorted = False
         self.__best_fitness = -inf
         return self
 
-    ''' the following functions allow the master to map a change on all colonies'''
-
     def set_generation(self, generation):
-        self.generation_f = generation
+        self.__generation_f = generation
         return self
 
     def set_cross(self, cross):
-        self.cross_f = cross
+        self.__cross_f = cross
         return self
 
     def set_mutation(self, mutation):
-        self.mutation_f = mutation
+        self.__mutation_f = mutation
         return self
 
     def set_selection(self, selection):
-        self.selection_f = selection
+        self.__selection_f = selection
         return self
 
-    def set_death(self, death):
-        self.death_f = death
+    def set_mutation_ratio(self, mut_ratio):
+        self.__mut_ratio = mut_ratio
         return self
 
     def set_survival(self, survival):
-        self.survival_f = survival
+        self.__survival = survival
+        return self
+
+    def set_death(self, death):
+        self.__death_f = death
         return self
 
     def set_control(self, control):
-        self.control_obj = copy.deepcopy(control)  # due to clustering, the object must be copied not referenced
+        self.__control_obj = copy.deepcopy(control)
         return self
 
-    def set_mut_ratio(self, ratio: float):
-        self.mut_ratio = ratio
-        return self
+    """ COLONY FUNCTIONS """
 
-    def set_elitism(self, ratio: float):
-        self.elitism = ratio
-        return self
-
-    # colony functions
-
-    def evaluate(self):
-        tevaluate = time()  # DELETE THIS
-        if self.control_obj:
-            self.__population = [(self.__evaluation_f(y, self.control_obj), y) for _, y in self.__population]
-        else:
-            self.__population = [(self.__evaluation_f(y), y) for _, y in self.__population]
-        self.fitness_time += time() - tevaluate  # DELETE THIS
-
-    def evaluate_input(self, ilist):
-        tevaluate = time()  # DELETE THIS
-        if self.control_obj:
-            self.__population = [(self.__evaluation_f(y, self.control_obj), y) for y in ilist]
-        else:
-            self.__population = [(self.__evaluation_f(y), y) for y in ilist]
-        self.__sorted = False
-        self.fitness_time += time() - tevaluate  # DELETE THIS
-
-    def __evaluate_return(self, ilist):
-        if self.control_obj:
-            return [(self.__evaluation_f(i, self.control_obj), i) for i in ilist]
-        else:
-            return [(self.__evaluation_f(i), i) for i in ilist]
-
-    def sort_population(self):
-        if not self.__sorted:
+    def __sort_population(self):
+        if not self.__sorted and self.__population:
             self.__population.sort(reverse=True)
             self.__sorted = True
             self.__best_fitness = self.__population[0][0]
 
-    def get_population(self, fitness: bool = True):
+    def __evaluate(self, ilist=None):
+        if self.__control_obj:
+            if ilist:
+                self.__population = [(self.__evaluation_f(i, self.__control_obj), i)
+                                     for i in ilist]
+            else:
+                self.__population = [(self.__evaluation_f(y, self.__control_obj), y)
+                                     for _, y in self.__population]
+        else:
+            if ilist:
+                self.__population = [(self.__evaluation_f(i), i)
+                                     for i in ilist]
+            else:
+                self.__population = [(self.__evaluation_f(y), y)
+                                     for _, y in self.__population]
+
+    def __evaluate_return(self, ilist):
+        if self.__control_obj:
+            return [(self.__evaluation_f(i, self.__control_obj), i) for i in ilist]
+        else:
+            return [(self.__evaluation_f(i), i) for i in ilist]
+
+    def get_population(self, fitness=True):
         if fitness:
             return self.__population
         else:
             return list(map(lambda x: x[1], self.__population))
 
     def populate(self, members):
-        if self.generation_f:
-            if isinstance(self.generation_f, int):
-                self.evaluate_input(['' for _ in range(members)])
-            elif isinstance(self.generation_f, str):
-                self.evaluate_input(['' for _ in range(members)])
-            elif callable(self.generation_f):
-                if self.control_obj:
-                    self.evaluate_input([self.generation_f(self.control_obj) for _ in range(members)])
-                else:
-                    self.evaluate_input([self.generation_f() for _ in range(members)])
-            else:
-                raise Exception('Wrong generation function')
-            self.__colony_size = members
-            self.__sorted = False
-            self.__best_fitness = -inf
+        if isinstance(self.__generation_f, int):
+            self.__evaluate(ilist=[f.generation_boolean(self.__generation_f)
+                                   for _ in range(members)])
+        elif isinstance(self.__generation_f, str):
+            lenght = int(self.__generation_f)
+            self.__evaluate(ilist=[f.generation_string(lenght)
+                                   for _ in range(members)])
         else:
-            raise Exception('You must set a generation function in order to populate')
+            if self.__control_obj:
+                self.__evaluate([self.__generation_f(self.__control_obj) for _ in range(members)])
+            else:
+                self.__evaluate([self.__generation_f() for _ in range(members)])
+        self.__colony_size = members
+        self.__rankval = int((self.__colony_size * (self.__colony_size + 1) / 2) - self.__colony_size)
+        self.__sorted = False
+        self.__best_fitness = -inf
         return self
 
     def get_best(self, *args):
         if self.__colony_size == 0:
             return -inf, None
-        self.sort_population()
+        self.__sort_population()
         if args:
             return self.__population[:min(args[0], self.__colony_size)]
         else:
             return self.__population[0]
+
+    """ EVOLUTION FUNCTIONS """
+
+    def evolve_reverse(self, iterations, objective=inf, wait=-1):
+        tevolve = time()
+        if self.__colony_size > 0 and self.__best_fitness<objective:
+            # calculate how generation works
+            cut_point = int(self.__survival*self.__colony_size)
+            num_sons_pairs = int((1-self.__survival)*self.__colony_size/2)
+            if 2*num_sons_pairs+cut_point < self.__colony_size:
+                num_sons_pairs += 1
+            # control variables
+            best = -inf
+            static = 0
+            self.last_iters = 0
+            for _ in range(iterations):
+                parents = self.__select_parents(num_sons_pairs)
+                newborns = self.__cross_parents(parents)
+                # flat newborns list
+                newborns = [item for sublist in newborns for item in sublist]
+                newborns = self.__mutate_newborns(newborns)
+                # first we extinct the population, then add newborns
+                self.__population_survival(cut_point)
+                # after population death append evaluated newborns
+                self.__population += self.__evaluate_return(newborns)
+                self.__sorted = False
+                # stop control
+                self.last_iters += 1
+                if self.__best_fitness >= objective:
+                    break
+                if self.__best_fitness > best:
+                    best = self.__population[0][0]
+                    static = 0
+                if static == wait:
+                    break
+        return self
+
+    def __select_parents(self, new_pool_size: int) -> list:
+        # parents: list of tuples (parent1, parent2),
+        # where parents = (fitness, element)
+        parents = None
+        if isinstance(self.__selection_f, str):
+            if self.__selection_f == 'roulette':
+                total_fitness = sum([x[0] for x in self.__population])
+                parents = f.selection_roulette(self.__population, total_fitness, new_pool_size)
+            elif self.__selection_f == 'ranked':
+                self.__sort_population()
+                parents = f.selection_ranked(self.__population, new_pool_size, self.__rankval)
+            elif self.__selection_f == 'random':
+                parents = f.selection_random(self.__population, new_pool_size)
+            elif self.__selection_f == 'pseudo':
+                self.__sort_population()
+                parents = f.selection_pseudo(self.__population, new_pool_size)
+        elif callable(self.__selection_f):
+            parents = self.__selection_f(self.__population, new_pool_size)
+        return parents
+
+    def __cross_parents(self, parents: list) -> list:
+        # parents: list of tuples (parent1, parent2),
+        # where parents = (fitness, element)
+        # newborns: list of tuples (element1, element2)
+        newborns = None
+        if isinstance(self.__cross_f, str):
+            if self.__cross_f == 'singlepoint':
+                newborns = [f.cross_single_point(parent1[1], parent2[1]) for parent1, parent2 in parents]
+            elif self.__cross_f == 'twopoint':
+                newborns = [f.cross_two_point(parent1[1], parent2[1]) for parent1, parent2 in parents]
+            elif self.__cross_f == 'uniform':
+                newborns = [f.cross_uniform(parent1[1], parent2[1]) for parent1, parent2 in parents]
+        elif callable(self.__cross_f):
+            newborns = [self.__cross_f(parent1[1], parent2[1]) for parent1, parent2 in parents]
+        return newborns
+
+    def __mutate_newborns(self, newborns: list) -> list:
+        # newborns: they come in a simple list
+        mutants = None
+        if newborns:
+            if isinstance(self.__mutation_f, str):
+                if self.__mutation_f == 'binary':
+                    if newborns and isinstance(newborns[0], str):
+                        mutants = [f.mutation_string(n, self.__mut_ratio) for n in newborns]
+                    else:
+                        mutants = [f.mutation_binary(n, self.__mut_ratio) for n in newborns]
+                elif self.__mutation_f == 'boolean':
+                    mutants = [f.mutation_boolean(n, self.__mut_ratio) for n in newborns]
+            elif callable(self.__mutation_f):
+                if self.__control_obj:
+                    mutants = [self.__mutation_f(self.__control_obj, n, self.__mut_ratio) for n in newborns]
+                else:
+                    mutants = [self.__mutation_f(n, self.__mut_ratio) for n in newborns]
+        return mutants
+
+    def __population_survival(self, target_size: int) -> None:
+        if isinstance(self.__survival_f, str):
+            if self.__survival_f == 'roulette':
+                self.__population = f.survival_roulette(self.__population, target_size)
+            elif self.__survival_f == 'ranked':
+                self.__sort_population()
+                self.__population = f.survival_ranked(self.__population, target_size)
+            elif self.__survival_f == 'simple':
+                self.__sort_population()
+                self.__population = f.simple_survival(self.__population, target_size)
+            elif self.__survival_f == 'pseudo':
+                self.__sort_population()
+                self.__population = f.survival_pseudo(self.__population, target_size)
+        elif callable(self.__survival_f):
+            self.__population = self.__survival_f(self.__population, target_size)
+
+    """
 
     # evolution functions
 
@@ -256,6 +314,7 @@ class Colony:
         elif self.__best_fitness < objective:
             new_pool_size = int(self.__colony_size * (1-self.elitism))  # how many are born each generation
             generational_survivors = self.__colony_size - new_pool_size  # how many survive from previous generation
+            print('elitism {} new_pool_size {} generational_survivors {}'.format(self.elitism,new_pool_size,generational_survivors))
             best = -inf
             end_countdown = 0
             for _ in range(iterations):
@@ -368,3 +427,4 @@ class Colony:
         else:
             raise Exception('Wrong survival function')
         self.extintion_time += time() - tdeath  # DELETE THIS
+        """
